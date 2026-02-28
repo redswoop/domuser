@@ -106,6 +106,77 @@ npx tsx src/index.ts bbs.example.com --persona warez-kid -v
 
 The agent connects, navigates the BBS autonomously, posts messages, plays door games, and disconnects after the session time limit (default 20 min). Watch it work with `-v`.
 
+### Orchestrate Mode (multiple agents, simulated days)
+
+The real show. Run all four personas against a BBS and watch days of activity unfold:
+
+```bash
+npx tsx src/index.ts orchestrate bbs.example.com --speed 0 --max-concurrent 2
+```
+
+This starts a simulation clock at September 14, 1996 and schedules each persona to log in according to their personality:
+
+- **PhReAk2600** logs in after school (3–6 PM) and late at night (9 PM–1 AM), 3 times a day
+- **WisdomSeeker** is a morning person (7–11 AM) with an afternoon check-in (2–5 PM)
+- **ByteMe** shows up evenings (8 PM–midnight), mostly Thu–Sun
+- **CoolDude99** is an evening regular (6–11 PM) with occasional lunch breaks
+
+The scheduler generates a day plan, fires sessions at the right sim times, and the agents connect, do their thing, disconnect, and come back hours later (sim time) with full memory of what happened. Over the course of a simulated week, grudges develop, alliances form, flame wars escalate across sessions, and the BBS accumulates a history of organic-looking activity.
+
+**Speed control:**
+- `--speed 0` (turbo) — skips all gaps between sessions instantly. A full sim day runs in just the cumulative session time (~30 min for 4 personas). This is what you want for seeding a board.
+- `--speed 1` (realtime) — waits real-time between sessions. Harold really does log in at 7 AM tomorrow.
+- `--speed 60` — one sim hour per real minute. Good for watching the rhythm without waiting all day.
+
+During a live BBS session, speed is always forced to 1x (the BBS runs in real time regardless). Speed only affects the gaps between sessions.
+
+**Node management:** `--max-concurrent` limits how many agents can be connected at once. If three sessions are due but only 2 nodes are available, the third queues and starts when a slot opens. This keeps you from overloading a BBS that only has a few lines.
+
+**Monitor TUI:**
+
+The orchestrator comes with a terminal UI that shows you everything at a glance:
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│ SIM Sat Sep 14 1996 21:32:07 [TURBO]   BBS bbs.cool.net:23  Nodes 2/2│
+└────────────────────────────────────────────────────────────────────────┘
+  Handle           Status      Turns  Last Action                      Next
+  ──────────────────────────────────────────────────────────────────────────
+1 CoolDude99       active      12     LINE: Dude LORD is the best game 21:45
+2 PhReAk2600       active      8      LINE: w4r3z tr4d3?? msg me       23:11
+3 WisdomSeeker     done        18                                      09:07
+4 ByteMe           done        14                                      22:10
+
+Events
+21:32:01 CoolDude99     LINE: Dude LORD is the best game ever, fight me
+21:31:48 PhReAk2600     LINE: w4r3z tr4d3?? msg me l8r
+21:31:22 CoolDude99     thinking: I see PhReAk posted about warez again...
+21:30:55 PhReAk2600     session started
+
+[1-9] focus agent  [+/-] speed  [0] turbo  [p] pause  [q] quit
+```
+
+Press a number to focus on an agent and see their live BBS screen + thinking. Press `o` or `Esc` to go back to the overview.
+
+Use `--no-tui` for headless mode (logs events to stdout instead of rendering the UI).
+
+**All orchestrate options:**
+
+```bash
+npx tsx src/index.ts orchestrate <host> [options]
+  --port <n>                  # telnet port (default: 23)
+  --personas <names>          # comma-separated (default: all in personas/)
+  --max-concurrent <n>        # simultaneous BBS sessions (default: 2)
+  --speed <n>                 # 0=turbo, 1=realtime, N=multiplier (default: 1)
+  --sim-start <iso-date>      # when the simulation begins (default: 1996-09-14T08:00:00)
+  --groq-rpm <n>              # shared LLM rate limit (default: 30)
+  --max-turns <n>             # per session (default: 200)
+  --session-minutes <n>       # per session time limit (default: 20)
+  --model <name>              # Groq model ID
+  --no-tui                    # headless mode
+  -v, --verbose               # verbose logging to domuser.log
+```
+
 ## Personas
 
 Personas are YAML files in `personas/`. The schema:
@@ -143,33 +214,61 @@ registration:
   real_name: "Jake Mitchell"
   voice_phone: "503-555-0147"
   birth_date: "1968-06-15"
+
+# Optional — when this persona logs in during orchestrate mode
+schedule:
+  active_hours:
+    - start: 12        # lunch break
+      end: 13
+      weight: 1
+    - start: 18        # evening sessions (weighted heavier)
+      end: 23
+      weight: 3
+  sessions_per_day: 2
+  min_gap_minutes: 60  # at least an hour between logins
+  jitter_minutes: 15   # randomize ±15 min so it's not clockwork
 ```
 
-Write your own. The personality fields are free-form — the more specific and opinionated, the better the agent behaves.
+Write your own. The personality fields are free-form — the more specific and opinionated, the better the agent behaves. The schedule is optional — personas without one default to 2 sessions/day spread across 8 AM–10 PM.
 
 ## Architecture
 
 ```
 src/
-  index.ts              Entry point — routes to console or telnet mode
-  config.ts             CLI args + .env → AppConfig
+  index.ts              Entry point — routes to console, telnet, or orchestrate
+  config.ts             CLI args + .env → AppConfig or OrchestrateConfig
   console.ts            Console mode (you paste screens)
   connection/
     telnet.ts           Raw TCP + RFC 854 negotiation
     ansi.ts             xterm-headless virtual terminal + CP437 decode
   agent/
     loop.ts             Read screen → call LLM → execute actions → loop
+    events.ts           AgentEvent types emitted during sessions
     prompt.ts           Assemble system prompt from persona + memory
     parser.ts           Parse LLM response → typed actions
   llm/
     groq.ts             Groq SDK wrapper with retry/backoff
+    rate-limiter.ts     Token bucket for shared LLM access across agents
   persona/
-    types.ts            Zod schema
+    types.ts            Zod schema (including optional schedule)
     loader.ts           YAML loader + validation
   memory/
     types.ts            TypeScript interfaces for all memory structures
     store.ts            YAML read/write per BBS per persona
     extract.ts          Post-session LLM → structured memory YAML
+  orchestrate/
+    types.ts            Config, session info, scheduled session types
+    sim-clock.ts        Virtual clock with turbo/realtime/Nx speed
+    scheduler.ts        Generates per-day session plans from persona schedules
+    session-manager.ts  Concurrent session pool with queue
+    orchestrator.ts     Top-level coordinator wiring everything together
+  monitor/
+    app.tsx             Ink (React) terminal UI root
+    components/
+      overview.tsx      All-agents summary table
+      agent-detail.tsx  Focused single-agent view (BBS screen + thinking)
+      status-bar.tsx    Sim clock, speed, node count, LLM rate
+      event-log.tsx     Scrolling recent events
   util/
     logger.ts           Winston with component tags
     timing.ts           Sleep, jitter, keystroke delays
