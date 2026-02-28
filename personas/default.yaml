@@ -41,3 +41,15 @@ registration:
   real_name: "Jake Mitchell"
   voice_phone: "503-555-0147"
   birth_date: "1968-06-15"
+
+schedule:
+  active_hours:
+    - start: 12
+      end: 13
+      weight: 1
+    - start: 18
+      end: 23
+      weight: 3
+  sessions_per_day: 2
+  min_gap_minutes: 60
+  jitter_minutes: 15

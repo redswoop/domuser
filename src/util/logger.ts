@@ -24,3 +24,20 @@ export function getLogger(component?: string): winston.Logger {
   }
   return logger.child({ component });
 }
+
+/**
+ * Replace the console transport with a file transport.
+ * Used in orchestrate mode so winston doesn't conflict with the ink TUI.
+ */
+export function replaceConsoleTransport(filePath: string): void {
+  if (!logger) {
+    logger = initLogger("info");
+  }
+  logger.clear();
+  logger.add(
+    new winston.transports.File({
+      filename: filePath,
+      format: combine(timestamp({ format: "HH:mm:ss.SSS" }), fmt),
+    }),
+  );
+}

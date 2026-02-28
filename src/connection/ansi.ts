@@ -1,5 +1,6 @@
 import iconv from "iconv-lite";
-import { Terminal } from "@xterm/headless";
+import xtermHeadless from "@xterm/headless";
+const { Terminal } = xtermHeadless;
 
 /**
  * Decode CP437 bytes (standard BBS character set) to UTF-8 string.
@@ -13,10 +14,10 @@ export function decodeCP437(buf: Buffer): string {
  * and maintains an 80x24 screen buffer, just like a real terminal.
  */
 export class VirtualTerminal {
-  private term: Terminal;
+  private term: InstanceType<typeof Terminal>;
 
   constructor(cols: number = 80, rows: number = 24) {
-    this.term = new Terminal({ cols, rows, scrollback: 100 });
+    this.term = new Terminal({ cols, rows, scrollback: 100, allowProposedApi: true });
   }
 
   /**

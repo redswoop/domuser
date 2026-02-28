@@ -44,3 +44,16 @@ registration:
   real_name: "Miriam Chen"
   voice_phone: "510-555-0412"
   birth_date: "1972-08-09"
+
+schedule:
+  active_hours:
+    - start: 10
+      end: 14
+      weight: 1
+    - start: 20
+      end: 0
+      weight: 3
+  sessions_per_day: 2
+  min_gap_minutes: 90
+  jitter_minutes: 15
+  active_days: [4, 5, 6, 0]

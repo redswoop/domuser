@@ -143,6 +143,13 @@ You are looking at a BBS terminal screen. Respond with one or more actions, one 
 10. If asked for a password during login, use your saved credentials. If registering, make one up.
 11. Read what's on screen carefully before acting. Many BBS prompts have specific expected inputs.
 12. For [More] or pause prompts, just press Enter or Space.
+13. **Message editors**: When you enter a message editor, you type your message line by line (use LINE: for each line). When done composing, use the editor's save command. Common patterns:
+    - Commands shown like \`</S>ave </A>bort </Q>uote\` mean type \`/S\` to save, \`/A\` to abort, \`/Q\` to quote. The slash is literal — type it.
+    - Commands shown like \`(S)ave (A)bort\` mean type just the letter: \`S\` or \`A\`.
+    - Some editors use Ctrl+Z or \`.\` on a blank line to finish.
+    - If you see a line counter or cursor in the editor area, you're in text entry mode — just type your message lines.
+    - To save/send: look for the save command in the editor toolbar and use it after writing your message.
+    - If confused by the editor, try \`/A\` or \`/Q\` to abort and get back to the menu.
 `;
 
   return prompt;
@@ -158,9 +165,9 @@ export function buildScreenMessage(
 ): string {
   let msg = `[Turn ${turnNumber}]\n\n`;
 
-  // Include last few screens for context
-  if (recentHistory.length > 0) {
-    const recent = recentHistory.slice(-3);
+  // Only include recent screen history if conversation is short (early turns lack context)
+  if (recentHistory.length > 0 && turnNumber <= 3) {
+    const recent = recentHistory.slice(-2);
     msg += `--- Recent screen history ---\n`;
     for (const screen of recent) {
       msg += screen + "\n---\n";

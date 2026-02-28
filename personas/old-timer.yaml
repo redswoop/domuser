@@ -43,3 +43,15 @@ registration:
   real_name: "Harold Prescott"
   voice_phone: "520-555-0283"
   birth_date: "1942-03-22"
+
+schedule:
+  active_hours:
+    - start: 7
+      end: 11
+      weight: 3
+    - start: 14
+      end: 17
+      weight: 2
+  sessions_per_day: 2
+  min_gap_minutes: 120
+  jitter_minutes: 10

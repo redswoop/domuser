@@ -1,3 +1,4 @@
+import { EventEmitter } from "events";
 import { TelnetConnection } from "../connection/telnet.js";
 import { TerminalBuffer } from "../util/terminal-buffer.js";
 import { MemoryStore } from "../memory/store.js";
@@ -8,6 +9,8 @@ import { parseActions, type Action } from "./parser.js";
 import { typeWithDelay, sleep } from "../util/timing.js";
 import type { Persona } from "../persona/types.js";
 import type { AppConfig } from "../config.js";
+import type { AgentEvent } from "./events.js";
+import type { RateLimiter } from "../llm/rate-limiter.js";
 import { getLogger } from "../util/logger.js";
 
 const log = getLogger("agent");
@@ -15,13 +18,18 @@ const log = getLogger("agent");
 // Pattern for [More] / pause prompts that don't need LLM reasoning
 const MORE_PATTERN = /\[More[:\s]*[\])]|Continue\s*\[Y\/n\]|Press\s+(?:ENTER|any key|RETURN)\s+to\s+continue|pause/i;
 
-export class AgentLoop {
+export interface AgentLoopOptions {
+  rateLimiter?: RateLimiter;
+}
+
+export class AgentLoop extends EventEmitter {
   private conn: TelnetConnection;
   private buffer: TerminalBuffer;
   private memory: MemoryStore;
   private persona: Persona;
   private config: AppConfig;
   private sessionTimestamp: string;
+  private options: AgentLoopOptions;
 
   private turnCount = 0;
   private conversationHistory: LLMMessage[] = [];
@@ -38,13 +46,41 @@ export class AgentLoop {
     memory: MemoryStore,
     persona: Persona,
     config: AppConfig,
+    options?: AgentLoopOptions,
   ) {
+    super();
     this.conn = conn;
     this.buffer = buffer;
     this.memory = memory;
     this.persona = persona;
     this.config = config;
+    this.options = options ?? {};
     this.sessionTimestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  }
+
+  private emitEvent(event: Partial<AgentEvent> & { type: AgentEvent["type"] }): void {
+    const full: AgentEvent = {
+      personaHandle: this.persona.handle,
+      timestamp: Date.now(),
+      turn: this.turnCount,
+      ...event,
+    };
+    this.emit("agent:event", full);
+  }
+
+  /** Gracefully stop the agent loop. Active turn finishes, then extraction runs. */
+  stop(): void {
+    this.running = false;
+  }
+
+  /** Current turn number. */
+  getTurnCount(): number {
+    return this.turnCount;
+  }
+
+  /** Whether the loop is currently running. */
+  isRunning(): boolean {
+    return this.running;
   }
 
   async run(): Promise<void> {
@@ -56,6 +92,7 @@ export class AgentLoop {
     this.conversationHistory.push({ role: "system", content: systemPrompt });
 
     log.info(`agent loop started — persona=${this.persona.handle}, max_turns=${this.config.maxTurns}`);
+    this.emitEvent({ type: "session:start" });
 
     while (this.running) {
       // Check limits
@@ -80,13 +117,16 @@ export class AgentLoop {
       try {
         await this.tick();
       } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
         log.error(`agent tick error: ${err}`);
+        this.emitEvent({ type: "error", error });
         await sleep(2000);
       }
     }
 
     // Post-session: extract and save structured memories
     await this.extractMemories();
+    this.emitEvent({ type: "session:end", reason: "complete" });
   }
 
   private async tick(): Promise<void> {
@@ -108,9 +148,12 @@ export class AgentLoop {
       log.info(`--- SCREEN (turn ${this.turnCount}) ---\n${screenText.slice(0, 500)}`);
     }
 
+    this.emitEvent({ type: "turn:screen", screenText });
+
     // Detect [More] prompts — handle without LLM
     if (MORE_PATTERN.test(screenText.trim().slice(-100))) {
       log.debug("auto-handling [More] prompt");
+      this.emitEvent({ type: "turn:more" });
       this.conn.sendKey("enter");
       return;
     }
@@ -121,6 +164,7 @@ export class AgentLoop {
       this.stuckCounter++;
       if (this.stuckCounter >= 3) {
         log.warn("stuck detected — same screen 3 times, forcing ESC + Enter");
+        this.emitEvent({ type: "turn:stuck" });
         this.conn.sendKey("esc");
         await sleep(500);
         this.conn.sendKey("enter");
@@ -139,6 +183,9 @@ export class AgentLoop {
 
     // Trim conversation history to avoid token limits (keep system + last 20 turns)
     this.trimHistory();
+
+    // Acquire rate limiter token before LLM call
+    await this.options.rateLimiter?.acquire();
 
     // Call LLM
     log.debug(`calling LLM (turn ${this.turnCount}, ${this.conversationHistory.length} messages)`);
@@ -162,6 +209,8 @@ export class AgentLoop {
       log.info(`--- LLM RESPONSE ---\n${response}`);
     }
 
+    this.emitEvent({ type: "turn:response", response });
+
     // Parse and execute actions
     const actions = parseActions(response);
     await this.executeActions(actions);
@@ -174,10 +223,12 @@ export class AgentLoop {
       switch (action.type) {
         case "THINKING":
           log.debug(`THINKING: ${action.value.slice(0, 120)}`);
+          this.emitEvent({ type: "turn:thinking", thinking: action.value });
           break;
 
         case "LINE":
           log.info(`LINE: ${action.value}`);
+          this.emitEvent({ type: "turn:action", action: { type: "LINE", value: action.value } });
           await typeWithDelay(
             (buf) => this.conn.send(buf),
             action.value,
@@ -190,6 +241,7 @@ export class AgentLoop {
 
         case "TYPE":
           log.info(`TYPE: ${action.value}`);
+          this.emitEvent({ type: "turn:action", action: { type: "TYPE", value: action.value } });
           await typeWithDelay(
             (buf) => this.conn.send(buf),
             action.value,
@@ -200,22 +252,26 @@ export class AgentLoop {
 
         case "KEY":
           log.info(`KEY: ${action.value}`);
+          this.emitEvent({ type: "turn:action", action: { type: "KEY", value: action.value } });
           this.conn.sendKey(action.value.trim().toLowerCase());
           break;
 
         case "WAIT":
           const ms = parseInt(action.value.trim(), 10) || 1000;
           log.debug(`WAIT: ${ms}ms`);
+          this.emitEvent({ type: "turn:action", action: { type: "WAIT", value: String(ms) } });
           await sleep(ms);
           break;
 
         case "MEMORY":
           log.info(`MEMORY: ${action.value}`);
           this.memoryNotes.push(action.value);
+          this.emitEvent({ type: "memory:note", note: action.value });
           break;
 
         case "DISCONNECT":
           log.info(`DISCONNECT: ${action.value}`);
+          this.emitEvent({ type: "turn:action", action: { type: "DISCONNECT", value: action.value } });
           this.running = false;
           this.conn.disconnect();
           return;
@@ -229,16 +285,19 @@ export class AgentLoop {
   }
 
   private trimHistory(): void {
-    // Keep system prompt + last 40 messages (20 turns)
-    if (this.conversationHistory.length > 41) {
+    // Keep system prompt + last 16 messages (8 turns)
+    // Old screens are already in the LLM's context from prior turns — no need to carry 20
+    if (this.conversationHistory.length > 17) {
       const system = this.conversationHistory[0];
-      const recent = this.conversationHistory.slice(-40);
+      const recent = this.conversationHistory.slice(-16);
       this.conversationHistory = [system, ...recent];
     }
   }
 
   private async extractMemories(): Promise<void> {
     try {
+      this.emitEvent({ type: "memory:extracting" });
+
       // Append any MEMORY notes so extraction sees them
       if (this.memoryNotes.length > 0) {
         this.conversationHistory.push({
@@ -246,14 +305,22 @@ export class AgentLoop {
           content: `MEMORY notes from this session:\n${this.memoryNotes.map((n) => `- ${n}`).join("\n")}`,
         });
       }
+
+      // Acquire rate limiter token for extraction LLM call
+      await this.options.rateLimiter?.acquire();
+
       await extractAndSaveMemories(
         this.conversationHistory,
         this.memory,
         this.persona,
         this.config.groqModel,
       );
+
+      this.emitEvent({ type: "memory:extracted" });
     } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
       log.error(`failed to extract memories: ${err}`);
+      this.emitEvent({ type: "error", error, reason: "memory extraction failed" });
     }
   }
 }

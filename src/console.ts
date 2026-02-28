@@ -110,9 +110,9 @@ async function submitScreen(
   history.push({ role: "user", content: userMsg });
 
   // Trim to keep context manageable
-  if (history.length > 41) {
+  if (history.length > 17) {
     const system = history[0];
-    const recent = history.slice(-40);
+    const recent = history.slice(-16);
     history.length = 0;
     history.push(system, ...recent);
   }

@@ -1,5 +1,19 @@
 import { z } from "zod";
 
+const ActiveHourSchema = z.object({
+  start: z.number().min(0).max(23),
+  end: z.number().min(0).max(23),
+  weight: z.number().default(1),
+});
+
+export const ScheduleSchema = z.object({
+  active_hours: z.array(ActiveHourSchema),
+  sessions_per_day: z.number().min(1).max(10).default(2),
+  min_gap_minutes: z.number().min(5).default(60),
+  jitter_minutes: z.number().min(0).default(15),
+  active_days: z.array(z.number().min(0).max(6)).optional(),
+});
+
 export const PersonaSchema = z.object({
   name: z.string(),
   handle: z.string(),
@@ -29,6 +43,9 @@ export const PersonaSchema = z.object({
     voice_phone: z.string(),
     birth_date: z.string(),
   }),
+
+  schedule: ScheduleSchema.optional(),
 });
 
 export type Persona = z.infer<typeof PersonaSchema>;
+export type Schedule = z.infer<typeof ScheduleSchema>;

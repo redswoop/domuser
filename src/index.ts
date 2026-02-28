@@ -10,7 +10,18 @@ import { decodeCP437 } from "./connection/ansi.js";
 import { runConsole } from "./console.js";
 
 async function main(): Promise<void> {
-  const config = parseConfig();
+  const result = parseConfig();
+
+  // Orchestrate mode — separate entry path
+  if (result.mode === "orchestrate") {
+    initLogger(result.config.verbose ? "debug" : result.config.logLevel);
+    const { Orchestrator } = await import("./orchestrate/orchestrator.js");
+    const orchestrator = new Orchestrator(result.config);
+    await orchestrator.run();
+    return;
+  }
+
+  const config = result.config;
   initLogger(config.verbose ? "debug" : config.logLevel);
   const log = getLogger("main");
 

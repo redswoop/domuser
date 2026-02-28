@@ -45,3 +45,15 @@ registration:
   real_name: "Dan Richards"
   voice_phone: "201-555-0991"
   birth_date: "1978-11-03"
+
+schedule:
+  active_hours:
+    - start: 15
+      end: 18
+      weight: 2
+    - start: 21
+      end: 1
+      weight: 3
+  sessions_per_day: 3
+  min_gap_minutes: 45
+  jitter_minutes: 20
